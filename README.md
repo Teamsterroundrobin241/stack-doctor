@@ -30,6 +30,22 @@ Safe by design: risky actions (restart, drop_caches) are **opt-in**, the queue f
 acts after an item is stuck for several consecutive checks, and everything supports
 `DOCTOR_DRY_RUN=true`.
 
+## Two ways to run (multi-level)
+
+stack-doctor scales to the access it's given:
+
+- **Container** (limited): the network/mount checks, `queue`, `plex`, the `decypharr` mount
+  read-test, and `resources`. It can't restart a *host* decypharr service or read host
+  journald, so leave `DECYPHARR_RESTART_CMD` empty (alert-only) or point it at
+  `docker restart <decypharr>` / an SSH hook. See [`docker-compose.example.yml`](docker-compose.example.yml).
+- **Host service** (full power): run it **on the same host as decypharr** (see
+  [`stack-doctor.service.example`](stack-doctor.service.example)). Now it restarts decypharr
+  natively (`DECYPHARR_RESTART_CMD=systemctl restart decypharr`), reads its journal for the
+  janitor (`JANITOR_LOG_CMD=journalctl -u decypharr ...`), and touches the library directly,
+  no container-to-host bridge needed. The *arr/Plex instances are still reached over the LAN.
+
+Same `doctor.py`, same env vars; you just enable more checks where it has more power.
+
 ---
 
 ## What the queue check fixes

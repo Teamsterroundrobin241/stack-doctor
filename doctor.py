@@ -89,9 +89,10 @@ PLEX_URL   = os.environ.get("PLEX_URL", "")
 PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
 PLEX_SCAN  = _b("PLEX_SCAN_ON_CHECK", False)
 
-# janitor
+# janitor (give it decypharr's error log via a file OR a command, e.g. journalctl when on-host)
 JAN_LIBS      = [p.strip() for p in os.environ.get("JANITOR_LIBRARY_PATHS", "").split(",") if p.strip()]
-JAN_LOG       = os.environ.get("JANITOR_DECYPHARR_LOG", "")         # decypharr log file (errors w/ release dirs)
+JAN_LOG       = os.environ.get("JANITOR_DECYPHARR_LOG", "")         # log file path
+JAN_LOG_CMD   = os.environ.get("JANITOR_LOG_CMD", "")               # cmd printing the log, e.g. "journalctl -u decypharr -n 10000 --no-hostname"
 JAN_QUAR      = os.environ.get("JANITOR_QUARANTINE_DIR", "/data/quarantine")
 JAN_PATTERNS  = os.environ.get("JANITOR_DEAD_PATTERNS", "ARTICLE_NOT_FOUND,still missing").split(",")
 
@@ -134,6 +135,14 @@ def run_cmd(cmd):
         return (p.returncode, (p.stdout + p.stderr).strip()[:300])
     except Exception as e:
         return (1, "cmd error: " + str(e)[:120])
+
+def run_output(cmd, t=120):
+    try:
+        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=t)
+        return p.stdout
+    except Exception as e:
+        log.warning("log cmd failed: %s", str(e)[:80])
+        return ""
 
 def host_load():
     try:
@@ -370,13 +379,16 @@ def check_resources():
 # =========================================================================== #
 
 def check_janitor():
-    if not (JAN_LIBS and JAN_LOG and os.path.exists(JAN_LOG)):
-        if EN_JANITOR:
-            log.debug("[janitor] need JANITOR_LIBRARY_PATHS + a readable JANITOR_DECYPHARR_LOG")
+    has_log = JAN_LOG_CMD or (JAN_LOG and os.path.exists(JAN_LOG))
+    if not (JAN_LIBS and has_log):
+        log.debug("[janitor] need JANITOR_LIBRARY_PATHS + (JANITOR_LOG_CMD or a readable JANITOR_DECYPHARR_LOG)")
         return
     bad = set()
     try:
-        data = open(JAN_LOG, errors="ignore").read()[-2_000_000:]  # tail
+        if JAN_LOG_CMD:
+            data = run_output(JAN_LOG_CMD)                       # e.g. journalctl when running on-host
+        else:
+            data = open(JAN_LOG, errors="ignore").read()[-2_000_000:]
     except Exception as e:
         log.warning("[janitor] cannot read log: %s", e); return
     pat = re.compile(r"Error streaming file: (.+?) error=\"([^\"]*)\"")
