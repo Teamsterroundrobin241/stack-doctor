@@ -26,6 +26,10 @@ services:
       DOCTOR_MIN_STRIKES: "2"      # consecutive sweeps stuck before acting (ignores transient blips)
       DOCTOR_MAX_ACTIONS: "20"     # max removals per sweep
       DOCTOR_BLOCKLIST: "true"     # blocklist removed grabs so a different release is fetched
+      # churn brake: stop a title that keeps grabbing dead releases (never imports, burns cycles)
+      DOCTOR_CHURN_LIMIT: "0"      # after N dead grabs of the same episode/movie, brake (0 = off)
+      DOCTOR_CHURN_ACTION: "report"   # report | park (un-monitor) | backoff (un-monitor, retry after cooldown)
+      DOCTOR_CHURN_COOLDOWN: "86400"  # backoff: seconds parked before a fresh retry
       # DOCTOR_LOAD_MAX: "60"      # skip queue sweep if host 1-min load above this
       # DOCTOR_CONDITIONS: "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
 

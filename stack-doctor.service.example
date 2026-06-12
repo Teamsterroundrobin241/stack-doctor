@@ -29,6 +29,10 @@ Environment=ENABLE_RESOURCES=true
 Environment=ENABLE_JANITOR=true
 Environment=ENABLE_WARMER=true
 Environment=DOCTOR_BLOCKLIST=true
+# churn brake: after 3 dead grabs of the same episode/movie, un-monitor it, then retry in 24h
+Environment=DOCTOR_CHURN_LIMIT=3
+Environment=DOCTOR_CHURN_ACTION=backoff
+Environment=DOCTOR_CHURN_COOLDOWN=86400
 # --- *arr instances (reach over the LAN); add prowlarr for the providers check ---
 Environment=INSTANCE_1_NAME=sonarr   INSTANCE_1_TYPE=sonarr    INSTANCE_1_URL=http://ARR_HOST:8989  INSTANCE_1_APIKEY=xxxx
 Environment=INSTANCE_2_NAME=radarr   INSTANCE_2_TYPE=radarr    INSTANCE_2_URL=http://ARR_HOST:7878  INSTANCE_2_APIKEY=xxxx

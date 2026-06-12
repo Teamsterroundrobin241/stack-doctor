@@ -119,6 +119,9 @@ A full example with four instances and `.env` is in
 | `DOCTOR_MIN_STRIKES` | `2` | item must be stuck this many consecutive checks before action (ignores transient blips like a download-client restart) |
 | `DOCTOR_MAX_ACTIONS` | `20` | max removals per sweep (rate limit, keeps re-searches gentle) |
 | `DOCTOR_BLOCKLIST` | `true` | blocklist removed grabs so a *different* release is fetched |
+| `DOCTOR_CHURN_LIMIT` | `0` | churn brake: after this many dead grabs of the *same* episode/movie, stop the loop (`0` = off). Catches releases that re-grab despite blocklist, or titles where only dead releases exist |
+| `DOCTOR_CHURN_ACTION` | `report` | what the brake does: `report` (log only), `park` (un-monitor), or `backoff` (un-monitor, then auto re-monitor after the cooldown for a fresh try) |
+| `DOCTOR_CHURN_COOLDOWN` | `86400` | `backoff`: seconds a parked title stays un-monitored before it's retried |
 | `DOCTOR_REMOVE_FROM_CLIENT` | `true` | also remove from the download client |
 | `DOCTOR_DRY_RUN` | `false` | `true` = log only, change nothing |
 | `DOCTOR_CONDITIONS` | *all* | comma list of conditions to act on (see table above) |

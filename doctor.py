@@ -78,6 +78,13 @@ MAX_ACTIONS   = _i("DOCTOR_MAX_ACTIONS", 20)
 BLOCKLIST     = _b("DOCTOR_BLOCKLIST", True)
 REMOVE_CLIENT = _b("DOCTOR_REMOVE_FROM_CLIENT", True)
 STATE_FILE    = os.environ.get("DOCTOR_STATE_FILE", "/data/state.json")
+# churn brake: a title that keeps grabbing dead releases (re-grabbed despite blocklist, or only
+# dead releases exist) never imports and just burns cycles. After CHURN_LIMIT failed grabs of the
+# SAME episode/movie, stop the loop. action: report (log only) | park (un-monitor) | backoff
+# (un-monitor, then auto re-monitor after CHURN_COOLDOWN for a fresh attempt).
+CHURN_LIMIT    = _i("DOCTOR_CHURN_LIMIT", 0)              # 0 = brake off
+CHURN_COOLDOWN = _i("DOCTOR_CHURN_COOLDOWN", 86400)       # backoff: seconds parked before retrying
+CHURN_ACTION   = os.environ.get("DOCTOR_CHURN_ACTION", "report").strip().lower()
 DEFAULT_CONDITIONS = "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
 ENABLED_CONDITIONS = [c.strip() for c in os.environ.get("DOCTOR_CONDITIONS", DEFAULT_CONDITIONS).split(",") if c.strip()]
 
@@ -247,6 +254,24 @@ class Arr:
         except Exception as ex:
             log.debug("[%s] POST %s err %s", self.name, path, str(ex)[:50]); return []
 
+    def set_monitored(self, ids, monitored):
+        """Bulk toggle monitoring for episodes (sonarr) / movies (radarr). Used by the churn brake."""
+        if self.kind == "sonarr":
+            path, body = "/episode/monitor", {"episodeIds": list(ids), "monitored": monitored}
+        elif self.kind == "radarr":
+            path, body = "/movie/editor", {"movieIds": list(ids), "monitored": monitored}
+        else:
+            return False
+        try:
+            self._req("PUT", path, data=json.dumps(body).encode()); return True
+        except Exception as e:
+            log.warning("[churn:%s] monitor %s failed: %s", self.name, "on" if monitored else "off", str(e)[:70])
+            return False
+
+    def queue_target_id(self, rec):
+        """Stable id of what a queue record is FOR (episode for sonarr, movie for radarr)."""
+        return rec.get("episodeId") if self.kind == "sonarr" else rec.get("movieId") if self.kind == "radarr" else None
+
 def load_instances():
     out = []
     for n in range(1, 51):
@@ -279,10 +304,53 @@ def _save_state(s):
     except Exception:
         pass
 
+def _offenders(state):
+    return state.setdefault("__offenders__", {})
+
+def _churn_record(state, arr, rec, title):
+    """Count a dead grab for this episode/movie; brake if it's over the limit.
+    Returns True if it un-monitored the target (so the caller knows the blocklist-remove won't re-search)."""
+    if CHURN_LIMIT <= 0:
+        return False
+    tid = arr.queue_target_id(rec)
+    if not tid:
+        return False
+    off = _offenders(state).setdefault(arr.name, {})
+    o = off.setdefault(str(tid), {"fails": 0, "until": 0, "title": title})
+    o["fails"] += 1; o["title"] = title
+    if o["fails"] < CHURN_LIMIT or o["until"] != 0:        # below limit, or already actioned
+        return False
+    if CHURN_ACTION == "report":
+        log.warning("[churn:%s] REPEAT-OFFENDER (%d dead grabs, still retrying): %s", arr.name, o["fails"], title)
+        o["until"] = -1
+        return False
+    if CHURN_ACTION in ("park", "backoff") and arr.set_monitored([int(tid)], False):
+        o["until"] = (time.time() + CHURN_COOLDOWN) if CHURN_ACTION == "backoff" else -1
+        log.warning("[churn:%s] REPEAT-OFFENDER parked (%d dead grabs) -> un-monitored%s: %s",
+                    arr.name, o["fails"],
+                    (" for %dh, will retry" % (CHURN_COOLDOWN // 3600)) if CHURN_ACTION == "backoff" else "",
+                    title)
+        return True
+    return False
+
+def _churn_remonitor(state):
+    """Re-monitor parked titles whose backoff cooldown has expired, giving them a fresh attempt."""
+    if CHURN_LIMIT <= 0 or CHURN_ACTION != "backoff":
+        return
+    now = time.time(); off_all = state.get("__offenders__", {})
+    for arr in INSTANCES:
+        for tid, o in list(off_all.get(arr.name, {}).items()):
+            until = o.get("until", 0)
+            if isinstance(until, (int, float)) and until > 0 and now >= until:
+                if arr.set_monitored([int(tid)], True):
+                    log.info("[churn:%s] cooldown expired, re-monitoring for a fresh attempt: %s", arr.name, o.get("title", ""))
+                    o["fails"] = 0; o["until"] = 0
+
 def check_queue(only=None):
     if LOAD_MAX > 0 and host_load() > LOAD_MAX:
         log.info("[queue] host load > %.0f -> skipping", LOAD_MAX); return
     state = _load_state(); actions = 0
+    _churn_remonitor(state)
     for arr in INSTANCES:
         if only and arr.name.lower() != only.lower():
             continue
@@ -300,9 +368,11 @@ def check_queue(only=None):
                 if DRY_RUN:
                     log.info("[queue:%s] WOULD remove (%s strike %d): %s", arr.name, reason, cnt, title)
                 else:
+                    parked = _churn_record(state, arr, r, title)   # un-monitor first so the remove can't re-search
                     try:
                         arr.remove(r["id"]); actions += 1; new.pop(iid, None)
-                        log.info("[queue:%s] removed (%s, blocklist=%s) -> re-search: %s", arr.name, reason, BLOCKLIST, title)
+                        log.info("[queue:%s] removed (%s, blocklist=%s)%s: %s", arr.name, reason, BLOCKLIST,
+                                 " [parked, no re-search]" if parked else " -> re-search", title)
                     except Exception as e:
                         log.warning("[queue:%s] remove failed: %s", arr.name, e)
         state[arr.name] = new
