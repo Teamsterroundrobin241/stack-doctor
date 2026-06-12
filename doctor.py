@@ -52,6 +52,24 @@ def _f(name, default):
     except (TypeError, ValueError):
         return default
 
+def _dur(tok, default=0):
+    """Parse a duration token: 30s / 10m / 2h / 1d, or a bare number of seconds."""
+    t = str(tok).strip().lower()
+    if not t:
+        return default
+    mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        return int(float(t[:-1]) * mult[t[-1]]) if t[-1] in mult else int(float(t))
+    except (ValueError, KeyError):
+        return default
+
+def _human(sec):
+    sec = int(sec)
+    for size, suf in ((86400, "d"), (3600, "h"), (60, "m")):
+        if sec >= size and sec % size == 0:
+            return "%d%s" % (sec // size, suf)
+    return "%ds" % sec
+
 MODE        = os.environ.get("DOCTOR_MODE", "cron").strip().lower()   # cron | event
 INTERVAL    = _i("DOCTOR_INTERVAL", 900)
 PORT        = _i("DOCTOR_PORT", 8088)
@@ -81,10 +99,15 @@ STATE_FILE    = os.environ.get("DOCTOR_STATE_FILE", "/data/state.json")
 # churn brake: a title that keeps grabbing dead releases (re-grabbed despite blocklist, or only
 # dead releases exist) never imports and just burns cycles. After CHURN_LIMIT failed grabs of the
 # SAME episode/movie, stop the loop. action: report (log only) | park (un-monitor) | backoff
-# (un-monitor, then auto re-monitor after CHURN_COOLDOWN for a fresh attempt).
+# (un-monitor, then auto re-monitor on an escalating schedule for a fresh attempt).
 CHURN_LIMIT    = _i("DOCTOR_CHURN_LIMIT", 0)              # 0 = brake off
-CHURN_COOLDOWN = _i("DOCTOR_CHURN_COOLDOWN", 86400)       # backoff: seconds parked before retrying
 CHURN_ACTION   = os.environ.get("DOCTOR_CHURN_ACTION", "report").strip().lower()
+# backoff retry schedule: each park steps to the next delay; the last entry repeats forever.
+# default "10m,1h,24h" = retry 10m after the 1st park, 1h after the 2nd, every 24h thereafter.
+CHURN_BACKOFF  = [_dur(x) for x in os.environ.get("DOCTOR_CHURN_BACKOFF", "").split(",") if x.strip()]
+if not CHURN_BACKOFF:
+    _legacy = os.environ.get("DOCTOR_CHURN_COOLDOWN")    # back-compat with the old single fixed cooldown
+    CHURN_BACKOFF = [_dur(_legacy)] if _legacy else [600, 3600, 86400]
 DEFAULT_CONDITIONS = "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
 ENABLED_CONDITIONS = [c.strip() for c in os.environ.get("DOCTOR_CONDITIONS", DEFAULT_CONDITIONS).split(",") if c.strip()]
 
@@ -316,25 +339,30 @@ def _churn_record(state, arr, rec, title):
     if not tid:
         return False
     off = _offenders(state).setdefault(arr.name, {})
-    o = off.setdefault(str(tid), {"fails": 0, "until": 0, "title": title})
+    o = off.setdefault(str(tid), {"fails": 0, "until": 0, "level": 0, "title": title})
     o["fails"] += 1; o["title"] = title
-    if o["fails"] < CHURN_LIMIT or o["until"] != 0:        # below limit, or already actioned
+    if o["fails"] < CHURN_LIMIT or o["until"] != 0:        # below limit, or already parked/reported
         return False
     if CHURN_ACTION == "report":
         log.warning("[churn:%s] REPEAT-OFFENDER (%d dead grabs, still retrying): %s", arr.name, o["fails"], title)
         o["until"] = -1
         return False
     if CHURN_ACTION in ("park", "backoff") and arr.set_monitored([int(tid)], False):
-        o["until"] = (time.time() + CHURN_COOLDOWN) if CHURN_ACTION == "backoff" else -1
-        log.warning("[churn:%s] REPEAT-OFFENDER parked (%d dead grabs) -> un-monitored%s: %s",
-                    arr.name, o["fails"],
-                    (" for %dh, will retry" % (CHURN_COOLDOWN // 3600)) if CHURN_ACTION == "backoff" else "",
-                    title)
+        o["fails"] = 0
+        if CHURN_ACTION == "backoff":
+            lvl = o.get("level", 0)
+            delay = CHURN_BACKOFF[min(lvl, len(CHURN_BACKOFF) - 1)]
+            o["until"] = time.time() + delay; o["level"] = lvl + 1
+            log.warning("[churn:%s] REPEAT-OFFENDER parked (retry #%d in %s) -> un-monitored: %s",
+                        arr.name, lvl + 1, _human(delay), title)
+        else:  # park: no auto-retry
+            o["until"] = -1
+            log.warning("[churn:%s] REPEAT-OFFENDER parked (un-monitored, manual re-monitor): %s", arr.name, title)
         return True
     return False
 
 def _churn_remonitor(state):
-    """Re-monitor parked titles whose backoff cooldown has expired, giving them a fresh attempt."""
+    """Re-monitor parked titles whose backoff delay has elapsed, giving them a fresh attempt."""
     if CHURN_LIMIT <= 0 or CHURN_ACTION != "backoff":
         return
     now = time.time(); off_all = state.get("__offenders__", {})
@@ -343,8 +371,9 @@ def _churn_remonitor(state):
             until = o.get("until", 0)
             if isinstance(until, (int, float)) and until > 0 and now >= until:
                 if arr.set_monitored([int(tid)], True):
-                    log.info("[churn:%s] cooldown expired, re-monitoring for a fresh attempt: %s", arr.name, o.get("title", ""))
-                    o["fails"] = 0; o["until"] = 0
+                    log.info("[churn:%s] backoff #%d elapsed, re-monitoring for a fresh attempt: %s",
+                             arr.name, o.get("level", 0), o.get("title", ""))
+                    o["fails"] = 0; o["until"] = 0           # keep level so the next park escalates
 
 def check_queue(only=None):
     if LOAD_MAX > 0 and host_load() > LOAD_MAX:

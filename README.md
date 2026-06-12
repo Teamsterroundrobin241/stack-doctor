@@ -120,8 +120,8 @@ A full example with four instances and `.env` is in
 | `DOCTOR_MAX_ACTIONS` | `20` | max removals per sweep (rate limit, keeps re-searches gentle) |
 | `DOCTOR_BLOCKLIST` | `true` | blocklist removed grabs so a *different* release is fetched |
 | `DOCTOR_CHURN_LIMIT` | `0` | churn brake: after this many dead grabs of the *same* episode/movie, stop the loop (`0` = off). Catches releases that re-grab despite blocklist, or titles where only dead releases exist |
-| `DOCTOR_CHURN_ACTION` | `report` | what the brake does: `report` (log only), `park` (un-monitor), or `backoff` (un-monitor, then auto re-monitor after the cooldown for a fresh try) |
-| `DOCTOR_CHURN_COOLDOWN` | `86400` | `backoff`: seconds a parked title stays un-monitored before it's retried |
+| `DOCTOR_CHURN_ACTION` | `report` | what the brake does: `report` (log only), `park` (un-monitor), or `backoff` (un-monitor, then auto re-monitor on the schedule below for a fresh try) |
+| `DOCTOR_CHURN_BACKOFF` | `10m,1h,24h` | `backoff`: escalating retry schedule (`s`/`m`/`h`/`d` units). Each park steps to the next delay; the last entry repeats. Default = retry 10m after the 1st park, 1h after the 2nd, every 24h after. (Legacy `DOCTOR_CHURN_COOLDOWN` still honored as a single fixed delay.) |
 | `DOCTOR_REMOVE_FROM_CLIENT` | `true` | also remove from the download client |
 | `DOCTOR_DRY_RUN` | `false` | `true` = log only, change nothing |
 | `DOCTOR_CONDITIONS` | *all* | comma list of conditions to act on (see table above) |
@@ -184,6 +184,23 @@ warmed, **0.02 s**. A cold 4K head took **15 s** to fetch, paid in advance inste
   every `WARMER_INTERVAL`.
 - `ondeck` , everything in Continue Watching / On Deck. Refreshed every `WARMER_ONDECK_EVERY`.
 - `recent` , the N most-recently-added per library (`WARMER_RECENT_COUNT`).
+
+**Works with any caching mount, not just decypharr.** The warmer never talks to decypharr; it
+just reads the head of the file at the path Plex reports, so the bytes land in whatever cache
+backs that mount. The only requirement is that the mount actually *caches reads*:
+
+- **decypharr** , its vfs + DFS disk cache keep the warmed head; nothing to configure.
+- **rclone** , run the mount with **`--vfs-cache-mode full`** (the usual Plex-on-debrid setup).
+  A head-read is then stored in rclone's on-disk vfs cache and serves Play instantly; how long
+  it stays warm follows `--vfs-cache-max-age`. With `--vfs-cache-mode off` (pure passthrough,
+  no cache) warming has little effect, the bytes aren't kept.
+- **zurg / NFS / any other mount** , same rule: helps if it caches reads, no-op if it doesn't.
+
+If stack-doctor runs where the path differs from Plex's, set `WARMER_PATH_MAP=plexPrefix:localPrefix`.
+
+The warmer is self-contained: you can run it **on its own** with every other check disabled
+(`ENABLE_WARMER=true`, all other `ENABLE_*=false`) , it needs only `PLEX_URL` + `PLEX_TOKEN`,
+no *arr instances.
 
 Plex exposes no "user opened the detail page" event (its API and webhooks are playback-only),
 so the warmer approximates intent with the high-hit-rate signals it *does* expose. It does
