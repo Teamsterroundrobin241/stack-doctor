@@ -20,6 +20,7 @@ services:
       ENABLE_RESOURCES: "true"       # host load / mem / swap
       ENABLE_JANITOR: "false"        # usenet dead-file quarantine (needs a decypharr log file)
       ENABLE_BAZARR: "false"         # Bazarr reachability (set BAZARR_URL/BAZARR_APIKEY)
+      ENABLE_WARMER: "false"         # precache the head of likely-next media (needs PLEX_URL/PLEX_TOKEN)
 
       # ---------- queue check ----------
       DOCTOR_MIN_STRIKES: "2"      # consecutive sweeps stuck before acting (ignores transient blips)
@@ -65,6 +66,17 @@ services:
       PLEX_URL: http://192.168.1.20:32400
       PLEX_TOKEN: ${PLEX_TOKEN}
       PLEX_SCAN_ON_CHECK: "false"    # also trigger a library refresh when Plex is up
+
+      # ---------- warmer (instant playback start; reuses PLEX_URL/PLEX_TOKEN) ----------
+      WARMER_PRECACHE_MB: "64"       # how much of each file's head to pull into cache
+      WARMER_TAIL_MB: "8"            # also pull the tail (mkv cues / Plex end-probe); 0 = off
+      WARMER_SOURCES: "ondeck,next"  # ondeck = Continue Watching, next = next episode of what's playing, recent = newly added
+      WARMER_INTERVAL: "120"         # seconds between session polls (next-episode prefetch)
+      WARMER_ONDECK_EVERY: "600"     # seconds between On Deck / recent warms
+      WARMER_MAX_PER_CYCLE: "12"     # cap warms per cycle (rate-limit the usenet fetch)
+      WARMER_COOLDOWN: "3600"        # don't re-warm the same file within this many seconds
+      WARMER_LOAD_MAX: "30"          # skip a warm cycle if host 1-min load is above this (protect live playback)
+      # WARMER_PATH_MAP: "/data/media:/mnt/library"   # if Plex's file path differs from this container's
 
       # ---------- resources ----------
       RES_LOAD_WARN: "40"

@@ -22,21 +22,30 @@ Environment=DOCTOR_INTERVAL=600
 Environment=DOCTOR_LOG_FILE=/var/log/stack-doctor.log
 # --- checks (host can run them all) ---
 Environment=ENABLE_QUEUE=true
+Environment=ENABLE_PROVIDERS=true
 Environment=ENABLE_DECYPHARR=true
 Environment=ENABLE_PLEX=true
 Environment=ENABLE_RESOURCES=true
 Environment=ENABLE_JANITOR=true
+Environment=ENABLE_WARMER=true
 Environment=DOCTOR_BLOCKLIST=true
-# --- *arr instances (reach over the LAN) ---
-Environment=INSTANCE_1_NAME=sonarr   INSTANCE_1_TYPE=sonarr  INSTANCE_1_URL=http://ARR_HOST:8989  INSTANCE_1_APIKEY=xxxx
-Environment=INSTANCE_2_NAME=radarr   INSTANCE_2_TYPE=radarr  INSTANCE_2_URL=http://ARR_HOST:7878  INSTANCE_2_APIKEY=xxxx
+# --- *arr instances (reach over the LAN); add prowlarr for the providers check ---
+Environment=INSTANCE_1_NAME=sonarr   INSTANCE_1_TYPE=sonarr    INSTANCE_1_URL=http://ARR_HOST:8989  INSTANCE_1_APIKEY=xxxx
+Environment=INSTANCE_2_NAME=radarr   INSTANCE_2_TYPE=radarr    INSTANCE_2_URL=http://ARR_HOST:7878  INSTANCE_2_APIKEY=xxxx
+Environment=INSTANCE_3_NAME=prowlarr INSTANCE_3_TYPE=prowlarr  INSTANCE_3_URL=http://ARR_HOST:9696  INSTANCE_3_APIKEY=xxxx
 # --- decypharr (LOCAL: native restart + journal, no ssh) ---
 Environment=DECYPHARR_MOUNT_TEST=/mnt/library/movies
 Environment=DECYPHARR_RESTART_CMD=systemctl restart decypharr
 Environment=DECYPHARR_URL=http://127.0.0.1:8282
-# --- plex ---
+# --- plex (also used by the warmer) ---
 Environment=PLEX_URL=http://PLEX_HOST:32400
 Environment=PLEX_TOKEN=xxxx
+# --- warmer (precache likely-next media so playback starts instantly) ---
+Environment=WARMER_PRECACHE_MB=64
+Environment=WARMER_TAIL_MB=8
+Environment=WARMER_SOURCES=ondeck,next
+Environment=WARMER_MAX_PER_CYCLE=12
+Environment=WARMER_LOAD_MAX=30
 # --- janitor reads decypharr's journal directly ---
 Environment=JANITOR_LIBRARY_PATHS=/mnt/library/tv,/mnt/library/movies
 Environment=JANITOR_LOG_CMD=journalctl -u decypharr -n 10000 --no-hostname

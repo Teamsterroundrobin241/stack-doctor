@@ -27,6 +27,7 @@ container, everything configured by env vars.
 | **resources** | host load / low memory / swap pressure | reports; optional `drop_caches` relief |
 | **janitor** | permanently-dead usenet releases (from decypharr's log) | quarantines those library symlinks (reversible) |
 | **bazarr** | Bazarr unreachable | alerts |
+| **warmer** | what a viewer is about to watch (Plex On Deck + next episode) | precaches the file head so playback starts instantly |
 
 Safe by design: risky actions (restart, drop_caches) are **opt-in**, the queue fixer only
 acts after an item is stuck for several consecutive checks, and everything supports
@@ -161,6 +162,51 @@ To avoid over-reacting, an item is only removed once it's been seen stuck on
 `MIN_STRIKES` **consecutive** checks. Counts persist in `/data/state.json`. This is what
 stops it from blocklisting items that are merely *temporarily* unavailable (for example while
 your download client restarts). Anything that recovers on its own is left alone.
+
+---
+
+## Playback warmer (instant start)
+
+On a usenet/debrid FUSE mount, the slow part of pressing **Play** is decypharr fetching the
+first segments from the provider, the few seconds (or, for 4K, *many* seconds) of "buffering"
+before it starts. The warmer pre-pays that cost: it asks Plex what a viewer is **about to
+watch** and reads the head of those files through the mount ahead of time, pulling them into
+decypharr's cache so playback starts instantly.
+
+Measured on a live stack: an untouched 1080p file served its first 8 MB in **2.7 s**; once
+warmed, **0.02 s**. A cold 4K head took **15 s** to fetch, paid in advance instead of at Play.
+
+**What it warms** (`WARMER_SOURCES`, default `ondeck,next`):
+- `next` , the next episode(s) of anything currently playing (great for binge sessions). Polled
+  every `WARMER_INTERVAL`.
+- `ondeck` , everything in Continue Watching / On Deck. Refreshed every `WARMER_ONDECK_EVERY`.
+- `recent` , the N most-recently-added per library (`WARMER_RECENT_COUNT`).
+
+Plex exposes no "user opened the detail page" event (its API and webhooks are playback-only),
+so the warmer approximates intent with the high-hit-rate signals it *does* expose. It does
+**not** force-delete warmed bytes: decypharr's cache is itself the speed win and already
+evicts by age/LRU. Instead it keeps speculative cost low , a small head, a per-cycle cap, a
+re-warm cooldown, and a host-load guard so it never competes with live playback.
+
+| var | default | meaning |
+|---|---|---|
+| `ENABLE_WARMER` | `false` | turn the warmer on (needs `PLEX_URL` + `PLEX_TOKEN`) |
+| `WARMER_PRECACHE_MB` | `64` | how much of each file's head to pull into cache |
+| `WARMER_TAIL_MB` | `8` | also pull the tail (mkv cues / Plex end-probe); `0` = off |
+| `WARMER_SOURCES` | `ondeck,next` | which signals to warm from (`ondeck`, `next`, `recent`) |
+| `WARMER_INTERVAL` | `120` | seconds between session polls (next-episode prefetch) |
+| `WARMER_ONDECK_EVERY` | `600` | seconds between On Deck / recent warms |
+| `WARMER_NEXT_EPISODES` | `1` | how many upcoming episodes of an active show to warm |
+| `WARMER_RECENT_COUNT` | `0` | warm N most-recently-added per library (`0` = off) |
+| `WARMER_MAX_PER_CYCLE` | `12` | cap warms per cycle (rate-limit the usenet fetch) |
+| `WARMER_COOLDOWN` | `3600` | don't re-warm the same file within this many seconds |
+| `WARMER_LOAD_MAX` | `0` | skip a cycle when host 1-min load is above this (`0` = off) |
+| `WARMER_READ_TIMEOUT` | `60` | abandon a single warm read after this long (hung-mount guard) |
+| `WARMER_PATH_MAP` | *(none)* | `plexPrefix:hostPrefix` if Plex's file path differs from this host's |
+
+> Items with multiple versions (e.g. a 4K and a 1080p file on one movie) warm every version,
+> since the warmer can't know which the client will pick. Lower `WARMER_MAX_PER_CYCLE` or
+> `WARMER_PRECACHE_MB` if that's too much speculative fetching for your provider.
 
 ---
 

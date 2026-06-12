@@ -6,11 +6,15 @@ decypharr + Plex media stack.
 Modular checks, each toggled and configured by environment variables:
 
   queue      *arr download queues       - clear stuck/dead/blocked items -> re-search
+  providers  *arr/prowlarr providers    - auto-Test failed indexers/download clients to clear them
   decypharr  decypharr mount + API      - detect a hung FUSE mount -> run a restart hook
   plex       Plex Media Server          - detect unresponsive Plex (+ optional library scan)
   resources  host load / memory / swap  - report pressure, optional drop_caches relief
   janitor    usenet dead files          - quarantine library symlinks for permanently-dead
                                            releases (reversible) from a decypharr log file
+  bazarr     Bazarr                     - reachability check
+  warmer     Plex-driven precache       - read the head of likely-next media so playback starts
+                                           instantly (next episode + On Deck); thread, not a sweep
 
 Runs as a cron-style interval loop OR reacts to Sonarr/Radarr webhook events.
 Pure Python standard library, no dependencies.
@@ -27,6 +31,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import xml.etree.ElementTree as ET
 
 # --------------------------------------------------------------------------- #
 # config helpers
@@ -93,6 +98,21 @@ DECY_RESTART_CMD  = os.environ.get("DECYPHARR_RESTART_CMD", "")     # shell cmd 
 PLEX_URL   = os.environ.get("PLEX_URL", "")
 PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
 PLEX_SCAN  = _b("PLEX_SCAN_ON_CHECK", False)
+
+# warmer (Plex-driven precache of the heads of likely-next media -> instant playback start)
+EN_WARMER         = _b("ENABLE_WARMER", False)
+WARM_HEAD_MB      = _i("WARMER_PRECACHE_MB", 64)        # how much of the file head to pull into cache
+WARM_TAIL_MB      = _i("WARMER_TAIL_MB", 8)             # also pull the tail (mkv cues / Plex end-probe); 0=off
+WARM_INTERVAL     = _i("WARMER_INTERVAL", 120)          # seconds between session polls (next-episode prefetch)
+WARM_ONDECK_EVERY = _i("WARMER_ONDECK_EVERY", 600)      # seconds between on-deck / recent warms
+WARM_NEXT_EPS     = _i("WARMER_NEXT_EPISODES", 1)       # warm this many upcoming episodes of an active show
+WARM_RECENT_COUNT = _i("WARMER_RECENT_COUNT", 0)        # warm N most-recently-added per library (0=off)
+WARM_MAX_CYCLE    = _i("WARMER_MAX_PER_CYCLE", 12)      # cap warms per cycle (rate-limit the usenet fetch)
+WARM_COOLDOWN     = _i("WARMER_COOLDOWN", 3600)         # do not re-warm the same file within this many seconds
+WARM_LOAD_MAX     = _f("WARMER_LOAD_MAX", 0)            # skip a cycle if host 1-min load above this (protect Plex); 0=off
+WARM_READ_TIMEOUT = _i("WARMER_READ_TIMEOUT", 60)       # abandon a single warm read after this long (hung mount guard)
+WARM_SOURCES      = [s.strip().lower() for s in os.environ.get("WARMER_SOURCES", "ondeck,next").split(",") if s.strip()]
+WARM_PATH_MAP     = os.environ.get("WARMER_PATH_MAP", "")   # "plexPrefix:hostPrefix" if Plex's file path != this host's
 
 # janitor (give it decypharr's error log via a file OR a command, e.g. journalctl when on-host)
 JAN_LIBS      = [p.strip() for p in os.environ.get("JANITOR_LIBRARY_PATHS", "").split(",") if p.strip()]
@@ -489,6 +509,161 @@ def check_bazarr():
     (log.info if c == 200 else log.error)("[bazarr] %s -> %s", BAZARR_URL, c if c else "DOWN")
 
 # =========================================================================== #
+# WARMER: precache the head of likely-next media so playback starts instantly
+#
+# On a usenet/debrid FUSE mount the slow part of pressing Play is decypharr
+# fetching the first segments from the provider. We ask Plex what a viewer is
+# about to watch (the next episode of whatever is playing, plus everything in
+# their On Deck / Continue Watching row) and read the first WARMER_PRECACHE_MB
+# of each through the mount, which pulls those bytes into decypharr's on-disk
+# cache. By the time Play is pressed, the head is already warm.
+#
+# Plex exposes no "user opened the detail page" event, so we approximate intent
+# with the high-hit-rate signals it DOES expose (active sessions + On Deck).
+# We do not force-delete warmed bytes: decypharr's cache is itself the speed
+# win and it already evicts by age/LRU; instead we keep speculative cost low
+# (small head, a per-cycle cap, a re-warm cooldown, and a host-load guard).
+# =========================================================================== #
+
+class Plex:
+    def __init__(self, url, token):
+        self.url = url.rstrip("/"); self.token = token
+
+    def _get(self, path):
+        sep = "&" if "?" in path else "?"
+        with urllib.request.urlopen(self.url + path + sep + "X-Plex-Token=" + self.token, timeout=15) as r:
+            return ET.fromstring(r.read())
+
+    def sessions(self):
+        try: return list(self._get("/status/sessions").iter("Video"))
+        except Exception: return []
+
+    def ondeck(self):
+        try: return list(self._get("/library/onDeck").iter("Video"))
+        except Exception: return []
+
+    def leaves(self, show_rk):
+        try: return list(self._get("/library/metadata/%s/allLeaves" % show_rk).iter("Video"))
+        except Exception: return []
+
+    def parts(self, rk):
+        out = []
+        try:
+            for p in self._get("/library/metadata/%s" % rk).iter("Part"):
+                if p.get("file"): out.append(p.get("file"))
+        except Exception: pass
+        return out
+
+    def recent(self, n):
+        out = []
+        try:
+            for d in self._get("/library/sections").iter("Directory"):
+                if d.get("type") in ("movie", "show"):
+                    ra = self._get("/library/sections/%s/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=%d" % (d.get("key"), n))
+                    out += list(ra.iter("Video"))[:n]
+        except Exception: pass
+        return out
+
+_warm_state = {}            # host_path -> last_warm_ts
+_warm_last_ondeck = [0.0]
+
+def _host_path(f):
+    if WARM_PATH_MAP and ":" in WARM_PATH_MAP:
+        a, b = WARM_PATH_MAP.split(":", 1)
+        if f.startswith(a):
+            return b + f[len(a):]
+    return f
+
+def _warm_file(path):
+    p = _host_path(path)
+    if time.time() - _warm_state.get(p, 0) < WARM_COOLDOWN:
+        return False
+    try:
+        sz = os.path.getsize(p)
+    except Exception as e:
+        log.debug("[warmer] stat fail %s: %s", p, str(e)[:60]); return False
+    head = min(WARM_HEAD_MB << 20, sz)
+    tail = WARM_TAIL_MB > 0 and sz > head + (WARM_TAIL_MB << 20)
+    res = {"got": 0, "err": None}
+    def _do():
+        try:
+            with open(p, "rb", buffering=0) as fh:
+                while res["got"] < head:
+                    b = fh.read(min(4 << 20, head - res["got"]))
+                    if not b: break
+                    res["got"] += len(b)
+                if tail:
+                    fh.seek(sz - (WARM_TAIL_MB << 20))
+                    while fh.read(4 << 20):
+                        pass
+        except Exception as e:
+            res["err"] = str(e)[:60]
+    t0 = time.time()
+    th = threading.Thread(target=_do, daemon=True); th.start(); th.join(WARM_READ_TIMEOUT)
+    if th.is_alive():
+        log.warning("[warmer] read timed out (%ds, mount slow/hung?): %s", WARM_READ_TIMEOUT, os.path.basename(p))
+        return False
+    if res["err"]:
+        log.warning("[warmer] read fail %s: %s", os.path.basename(p), res["err"]); return False
+    _warm_state[p] = time.time()
+    log.info("[warmer] warmed %dMB head%s in %.1fs: %s",
+             res["got"] >> 20, "+%dMB tail" % WARM_TAIL_MB if tail else "",
+             time.time() - t0, os.path.basename(p))
+    return True
+
+def _warm_targets(plex):
+    """Ordered, de-duped list of (reason, plex_file_path) to warm this cycle."""
+    targets, seen = [], set()
+    def add(reason, path):
+        if path and path not in seen:
+            seen.add(path); targets.append((reason, path))
+    if "next" in WARM_SOURCES:                              # next episode(s) of anything playing
+        for v in plex.sessions():
+            if v.get("type") != "episode" or not v.get("grandparentRatingKey"):
+                continue
+            eps = plex.leaves(v.get("grandparentRatingKey"))
+            idx = next((i for i, e in enumerate(eps) if e.get("ratingKey") == v.get("ratingKey")), -1)
+            if idx >= 0:
+                for e in eps[idx + 1: idx + 1 + WARM_NEXT_EPS]:
+                    for f in plex.parts(e.get("ratingKey")):
+                        add("next-ep", f)
+    if time.time() - _warm_last_ondeck[0] >= WARM_ONDECK_EVERY:
+        _warm_last_ondeck[0] = time.time()
+        if "ondeck" in WARM_SOURCES:                        # Continue Watching / Up Next
+            for v in plex.ondeck():
+                for f in plex.parts(v.get("ratingKey")):
+                    add("ondeck", f)
+        if "recent" in WARM_SOURCES and WARM_RECENT_COUNT > 0:
+            for v in plex.recent(WARM_RECENT_COUNT):
+                for f in plex.parts(v.get("ratingKey")):
+                    add("recent", f)
+    return targets
+
+def warm_cycle():
+    if WARM_LOAD_MAX > 0 and host_load() > WARM_LOAD_MAX:
+        log.info("[warmer] host load > %.0f -> skip cycle", WARM_LOAD_MAX); return
+    targets = _warm_targets(Plex(PLEX_URL, PLEX_TOKEN))
+    done = 0
+    for _, path in targets:
+        if done >= WARM_MAX_CYCLE:
+            break
+        if _warm_file(path):
+            done += 1
+    if done:
+        log.info("[warmer] cycle warmed %d (of %d candidate paths)", done, len(targets))
+
+def warmer_loop(stop):
+    log.info("[warmer] started: head=%dMB tail=%dMB sources=%s poll=%ds ondeck-every=%ds",
+             WARM_HEAD_MB, WARM_TAIL_MB, ",".join(WARM_SOURCES) or "-", WARM_INTERVAL, WARM_ONDECK_EVERY)
+    while not stop.is_set():
+        try:
+            warm_cycle()
+        except Exception as e:
+            log.error("[warmer] cycle error: %s", e)
+        if stop.wait(WARM_INTERVAL):
+            break
+
+# =========================================================================== #
 # sweep / loop
 # =========================================================================== #
 
@@ -517,18 +692,25 @@ def main():
     global INSTANCES
     INSTANCES = load_instances()
     enabled = [c for c, e, _ in CHECKS if e]
+    warmer_on = EN_WARMER and bool(PLEX_URL)
+    if EN_WARMER and not PLEX_URL:
+        log.warning("ENABLE_WARMER set but PLEX_URL is empty -> warmer disabled")
     if EN_QUEUE and not INSTANCES:
         log.error("queue check enabled but no instances. Set INSTANCE_1_URL / _APIKEY / _TYPE.")
         sys.exit(2)
-    if not enabled:
-        log.error("no checks enabled. Set ENABLE_QUEUE / ENABLE_DECYPHARR / ENABLE_PLEX / ENABLE_RESOURCES / ENABLE_JANITOR.")
+    if not enabled and not warmer_on:
+        log.error("nothing enabled. Set ENABLE_QUEUE / ENABLE_DECYPHARR / ENABLE_PLEX / ENABLE_RESOURCES / ENABLE_JANITOR / ENABLE_WARMER.")
         sys.exit(2)
-    log.info("stack-doctor v0.2 | mode=%s | checks=[%s] | instances=%s | dry_run=%s",
-             MODE, ",".join(enabled), ", ".join(a.name for a in INSTANCES) or "-", DRY_RUN)
+    log.info("stack-doctor v0.2 | mode=%s | checks=[%s]%s | instances=%s | dry_run=%s",
+             MODE, ",".join(enabled), " +warmer" if warmer_on else "",
+             ", ".join(a.name for a in INSTANCES) or "-", DRY_RUN)
 
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *a: stop.set())
     signal.signal(signal.SIGINT, lambda *a: stop.set())
+
+    if warmer_on:
+        threading.Thread(target=warmer_loop, args=(stop,), daemon=True).start()
 
     if MODE == "event":
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
