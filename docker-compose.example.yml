@@ -1,16 +1,16 @@
 services:
-  arr-sentinel:
-    image: ghcr.io/neoo-blue/arr-sentinel:latest
+  stack-doctor:
+    image: ghcr.io/neoo-blue/stack-doctor:latest
     # or build locally:  build: .
-    container_name: arr-sentinel
+    container_name: stack-doctor
     restart: unless-stopped
     environment:
       # ---------- mode ----------
-      SENTINEL_MODE: cron            # cron | event
-      SENTINEL_INTERVAL: "900"       # cron: seconds between sweeps
-      SENTINEL_DRY_RUN: "false"      # true = log only, change nothing
-      SENTINEL_LOG_LEVEL: INFO
-      SENTINEL_LOG_FILE: /data/sentinel.log   # rotating file log (also logs to stdout)
+      DOCTOR_MODE: cron            # cron | event
+      DOCTOR_INTERVAL: "900"       # cron: seconds between sweeps
+      DOCTOR_DRY_RUN: "false"      # true = log only, change nothing
+      DOCTOR_LOG_LEVEL: INFO
+      DOCTOR_LOG_FILE: /data/doctor.log   # rotating file log (also logs to stdout)
 
       # ---------- which checks to run ----------
       ENABLE_QUEUE: "true"           # *arr stuck-queue cleaner
@@ -20,11 +20,11 @@ services:
       ENABLE_JANITOR: "false"        # usenet dead-file quarantine (needs a decypharr log file)
 
       # ---------- queue check ----------
-      SENTINEL_MIN_STRIKES: "2"      # consecutive sweeps stuck before acting (ignores transient blips)
-      SENTINEL_MAX_ACTIONS: "20"     # max removals per sweep
-      SENTINEL_BLOCKLIST: "true"     # blocklist removed grabs so a different release is fetched
-      # SENTINEL_LOAD_MAX: "60"      # skip queue sweep if host 1-min load above this
-      # SENTINEL_CONDITIONS: "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
+      DOCTOR_MIN_STRIKES: "2"      # consecutive sweeps stuck before acting (ignores transient blips)
+      DOCTOR_MAX_ACTIONS: "20"     # max removals per sweep
+      DOCTOR_BLOCKLIST: "true"     # blocklist removed grabs so a different release is fetched
+      # DOCTOR_LOAD_MAX: "60"      # skip queue sweep if host 1-min load above this
+      # DOCTOR_CONDITIONS: "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
 
       INSTANCE_1_NAME: sonarr
       INSTANCE_1_TYPE: sonarr

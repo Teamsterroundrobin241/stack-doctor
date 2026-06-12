@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-arr-sentinel - auto-detect and fix recurring issues across a Sonarr/Radarr +
+stack-doctor - auto-detect and fix recurring issues across a Sonarr/Radarr +
 decypharr + Plex media stack.
 
 Modular checks, each toggled and configured by environment variables:
@@ -47,13 +47,13 @@ def _f(name, default):
     except (TypeError, ValueError):
         return default
 
-MODE        = os.environ.get("SENTINEL_MODE", "cron").strip().lower()   # cron | event
-INTERVAL    = _i("SENTINEL_INTERVAL", 900)
-PORT        = _i("SENTINEL_PORT", 8088)
-LOG_LEVEL   = os.environ.get("SENTINEL_LOG_LEVEL", "INFO").upper()
-LOG_FILE    = os.environ.get("SENTINEL_LOG_FILE", "")
-TIMEOUT     = _i("SENTINEL_HTTP_TIMEOUT", 60)
-DRY_RUN     = _b("SENTINEL_DRY_RUN", False)
+MODE        = os.environ.get("DOCTOR_MODE", "cron").strip().lower()   # cron | event
+INTERVAL    = _i("DOCTOR_INTERVAL", 900)
+PORT        = _i("DOCTOR_PORT", 8088)
+LOG_LEVEL   = os.environ.get("DOCTOR_LOG_LEVEL", "INFO").upper()
+LOG_FILE    = os.environ.get("DOCTOR_LOG_FILE", "")
+TIMEOUT     = _i("DOCTOR_HTTP_TIMEOUT", 60)
+DRY_RUN     = _b("DOCTOR_DRY_RUN", False)
 
 # which checks are on
 EN_QUEUE     = _b("ENABLE_QUEUE", True)
@@ -63,16 +63,16 @@ EN_RESOURCES = _b("ENABLE_RESOURCES", False)
 EN_JANITOR   = _b("ENABLE_JANITOR", False)
 
 # queue check
-MIN_STRIKES   = _i("SENTINEL_MIN_STRIKES", 2)
-MAX_ACTIONS   = _i("SENTINEL_MAX_ACTIONS", 20)
-BLOCKLIST     = _b("SENTINEL_BLOCKLIST", True)
-REMOVE_CLIENT = _b("SENTINEL_REMOVE_FROM_CLIENT", True)
-STATE_FILE    = os.environ.get("SENTINEL_STATE_FILE", "/data/state.json")
+MIN_STRIKES   = _i("DOCTOR_MIN_STRIKES", 2)
+MAX_ACTIONS   = _i("DOCTOR_MAX_ACTIONS", 20)
+BLOCKLIST     = _b("DOCTOR_BLOCKLIST", True)
+REMOVE_CLIENT = _b("DOCTOR_REMOVE_FROM_CLIENT", True)
+STATE_FILE    = os.environ.get("DOCTOR_STATE_FILE", "/data/state.json")
 DEFAULT_CONDITIONS = "downloadClientUnavailable,importBlocked,importFailed,importPending_warning,failedPending,stalled"
-ENABLED_CONDITIONS = [c.strip() for c in os.environ.get("SENTINEL_CONDITIONS", DEFAULT_CONDITIONS).split(",") if c.strip()]
+ENABLED_CONDITIONS = [c.strip() for c in os.environ.get("DOCTOR_CONDITIONS", DEFAULT_CONDITIONS).split(",") if c.strip()]
 
 # resource thresholds (host load uses /proc/loadavg if mounted)
-LOAD_MAX        = _f("SENTINEL_LOAD_MAX", 0)         # queue check pauses above this (0=off)
+LOAD_MAX        = _f("DOCTOR_LOAD_MAX", 0)         # queue check pauses above this (0=off)
 RES_LOAD_WARN   = _f("RES_LOAD_WARN", 40)
 RES_SWAP_WARN   = _i("RES_SWAP_WARN_MB", 7000)
 RES_MEM_MIN     = _i("RES_MEM_MIN_MB", 800)
@@ -96,7 +96,7 @@ JAN_QUAR      = os.environ.get("JANITOR_QUARANTINE_DIR", "/data/quarantine")
 JAN_PATTERNS  = os.environ.get("JANITOR_DEAD_PATTERNS", "ARTICLE_NOT_FOUND,still missing").split(",")
 
 TRIGGER_EVENTS = set(e.strip() for e in os.environ.get(
-    "SENTINEL_TRIGGER_EVENTS", "Download,ManualInteractionRequired,DownloadFailed,Grab").split(",") if e.strip())
+    "DOCTOR_TRIGGER_EVENTS", "Download,ManualInteractionRequired,DownloadFailed,Grab").split(",") if e.strip())
 
 # --------------------------------------------------------------------------- #
 # logging
@@ -111,7 +111,7 @@ if LOG_FILE:
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
                     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S", handlers=handlers)
-log = logging.getLogger("sentinel")
+log = logging.getLogger("doctor")
 
 # --------------------------------------------------------------------------- #
 # small helpers
@@ -452,7 +452,7 @@ def main():
     if not enabled:
         log.error("no checks enabled. Set ENABLE_QUEUE / ENABLE_DECYPHARR / ENABLE_PLEX / ENABLE_RESOURCES / ENABLE_JANITOR.")
         sys.exit(2)
-    log.info("arr-sentinel v0.2 | mode=%s | checks=[%s] | instances=%s | dry_run=%s",
+    log.info("stack-doctor v0.2 | mode=%s | checks=[%s] | instances=%s | dry_run=%s",
              MODE, ",".join(enabled), ", ".join(a.name for a in INSTANCES) or "-", DRY_RUN)
 
     stop = threading.Event()
@@ -465,7 +465,7 @@ def main():
             def _ok(self, code=200, body=b"ok"):
                 self.send_response(code); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(body)
             def do_GET(self):
-                self._ok(body=b"arr-sentinel ok") if self.path in ("/", "/health", "/healthz") else self._ok(404, b"nf")
+                self._ok(body=b"stack-doctor ok") if self.path in ("/", "/health", "/healthz") else self._ok(404, b"nf")
             def do_POST(self):
                 n = int(self.headers.get("Content-Length", 0) or 0)
                 try:
@@ -494,7 +494,7 @@ def main():
         sweep()
         while not stop.wait(INTERVAL):
             sweep()
-    log.info("arr-sentinel stopped")
+    log.info("stack-doctor stopped")
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,4 @@
-# arr-sentinel
+# stack-doctor
 
 **A self-hosted health daemon that auto-detects and fixes the recurring problems in a
 Sonarr/Radarr + decypharr + Plex media stack.**
@@ -9,7 +9,7 @@ the failure modes: downloads that finish but never import, dead grabs stuck as
 hung decypharr FUSE mount that takes Plex down, memory/load pressure that OOMs your arrs.
 You only notice when something's "missing" or the family complains.
 
-arr-sentinel runs a set of **modular checks** on an interval (or on Sonarr/Radarr webhooks),
+stack-doctor runs a set of **modular checks** on an interval (or on Sonarr/Radarr webhooks),
 detects these, and fixes the safe ones automatically. No third-party dependencies, one small
 container, everything configured by env vars.
 
@@ -28,13 +28,13 @@ container, everything configured by env vars.
 
 Safe by design: risky actions (restart, drop_caches) are **opt-in**, the queue fixer only
 acts after an item is stuck for several consecutive checks, and everything supports
-`SENTINEL_DRY_RUN=true`.
+`DOCTOR_DRY_RUN=true`.
 
 ---
 
 ## What the queue check fixes
 
-Each is a named **condition** you can enable/disable via `SENTINEL_CONDITIONS`:
+Each is a named **condition** you can enable/disable via `DOCTOR_CONDITIONS`:
 
 | condition | what it catches |
 |---|---|
@@ -57,15 +57,15 @@ release for an item is blocklisted, there's nothing left to grab, so the churn s
 ```yaml
 # docker-compose.yml
 services:
-  arr-sentinel:
-    image: ghcr.io/neoo-blue/arr-sentinel:latest
-    container_name: arr-sentinel
+  stack-doctor:
+    image: ghcr.io/neoo-blue/stack-doctor:latest
+    container_name: stack-doctor
     restart: unless-stopped
     environment:
-      SENTINEL_MODE: cron
-      SENTINEL_INTERVAL: "900"
-      SENTINEL_MIN_STRIKES: "2"
-      SENTINEL_BLOCKLIST: "true"
+      DOCTOR_MODE: cron
+      DOCTOR_INTERVAL: "900"
+      DOCTOR_MIN_STRIKES: "2"
+      DOCTOR_BLOCKLIST: "true"
       INSTANCE_1_NAME: sonarr
       INSTANCE_1_TYPE: sonarr
       INSTANCE_1_URL: http://sonarr:8989
@@ -80,12 +80,12 @@ services:
 
 ```bash
 docker compose up -d
-docker compose logs -f arr-sentinel
+docker compose logs -f stack-doctor
 ```
 
 A full example with four instances and `.env` is in
 [`docker-compose.example.yml`](docker-compose.example.yml). **Tip:** start with
-`SENTINEL_DRY_RUN: "true"` to see what it *would* remove before letting it act.
+`DOCTOR_DRY_RUN: "true"` to see what it *would* remove before letting it act.
 
 ---
 
@@ -95,20 +95,20 @@ A full example with four instances and `.env` is in
 
 | var | default | meaning |
 |---|---|---|
-| `SENTINEL_MODE` | `cron` | `cron` (interval sweeps) or `event` (Sonarr/Radarr webhook) |
-| `SENTINEL_INTERVAL` | `900` | cron: seconds between sweeps |
-| `SENTINEL_MIN_STRIKES` | `2` | item must be stuck this many consecutive checks before action (ignores transient blips like a download-client restart) |
-| `SENTINEL_MAX_ACTIONS` | `20` | max removals per sweep (rate limit, keeps re-searches gentle) |
-| `SENTINEL_BLOCKLIST` | `true` | blocklist removed grabs so a *different* release is fetched |
-| `SENTINEL_REMOVE_FROM_CLIENT` | `true` | also remove from the download client |
-| `SENTINEL_DRY_RUN` | `false` | `true` = log only, change nothing |
-| `SENTINEL_CONDITIONS` | *all* | comma list of conditions to act on (see table above) |
-| `SENTINEL_LOAD_MAX` | `0` | if > 0, skip a sweep when host 1-min load exceeds it (mount `/proc/loadavg:ro`) |
-| `SENTINEL_HEALTH_REPORT` | `true` | log *arr `/health` warnings at debug level |
-| `SENTINEL_STATE_FILE` | `/data/state.json` | where strike counts persist |
-| `SENTINEL_PORT` | `8088` | webhook port (event mode) |
-| `SENTINEL_TRIGGER_EVENTS` | `Download,ManualInteractionRequired,DownloadFailed,Grab` | webhook events that trigger a sweep |
-| `SENTINEL_LOG_LEVEL` | `INFO` | `DEBUG` for verbose |
+| `DOCTOR_MODE` | `cron` | `cron` (interval sweeps) or `event` (Sonarr/Radarr webhook) |
+| `DOCTOR_INTERVAL` | `900` | cron: seconds between sweeps |
+| `DOCTOR_MIN_STRIKES` | `2` | item must be stuck this many consecutive checks before action (ignores transient blips like a download-client restart) |
+| `DOCTOR_MAX_ACTIONS` | `20` | max removals per sweep (rate limit, keeps re-searches gentle) |
+| `DOCTOR_BLOCKLIST` | `true` | blocklist removed grabs so a *different* release is fetched |
+| `DOCTOR_REMOVE_FROM_CLIENT` | `true` | also remove from the download client |
+| `DOCTOR_DRY_RUN` | `false` | `true` = log only, change nothing |
+| `DOCTOR_CONDITIONS` | *all* | comma list of conditions to act on (see table above) |
+| `DOCTOR_LOAD_MAX` | `0` | if > 0, skip a sweep when host 1-min load exceeds it (mount `/proc/loadavg:ro`) |
+| `DOCTOR_HEALTH_REPORT` | `true` | log *arr `/health` warnings at debug level |
+| `DOCTOR_STATE_FILE` | `/data/state.json` | where strike counts persist |
+| `DOCTOR_PORT` | `8088` | webhook port (event mode) |
+| `DOCTOR_TRIGGER_EVENTS` | `Download,ManualInteractionRequired,DownloadFailed,Grab` | webhook events that trigger a sweep |
+| `DOCTOR_LOG_LEVEL` | `INFO` | `DEBUG` for verbose |
 
 ### Instances
 
@@ -125,14 +125,14 @@ Add as many as you want, numbered from 1:
 
 ## Cron vs Event mode
 
-**Cron** (default): a daemon that sweeps every `SENTINEL_INTERVAL` seconds. Simple, reliable,
+**Cron** (default): a daemon that sweeps every `DOCTOR_INTERVAL` seconds. Simple, reliable,
 catches everything within ~`INTERVAL × MIN_STRIKES`.
 
-**Event**: arr-sentinel runs a tiny webhook server. Point each *arr at it
-(*Settings → Connect → Webhook*, URL `http://arr-sentinel:8088`, on **On Grab / On Import
+**Event**: stack-doctor runs a tiny webhook server. Point each *arr at it
+(*Settings → Connect → Webhook*, URL `http://stack-doctor:8088`, on **On Grab / On Import
 Failure / On Manual Interaction Required**) and it sweeps the moment the *arr reports trouble.
 A slow safety-net sweep still runs in the background in case a webhook is missed. In event
-mode you'll usually set `SENTINEL_MIN_STRIKES: "1"` to act immediately, the event already
+mode you'll usually set `DOCTOR_MIN_STRIKES: "1"` to act immediately, the event already
 confirms the item is stuck.
 
 ---
@@ -148,7 +148,7 @@ your download client restarts). Anything that recovers on its own is left alone.
 
 ## Extending
 
-Conditions are just predicates in `sentinel.py` (`CONDITIONS` dict). Adding a new
+Conditions are just predicates in `doctor.py` (`CONDITIONS` dict). Adding a new
 detect/fix rule is a couple of lines. PRs welcome.
 
 ## License
