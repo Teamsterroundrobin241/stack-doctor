@@ -277,6 +277,7 @@ own concurrency lane, even during playback.
 | `WARMER_PRECACHE_MB` | `64` | how much of each file's head to pull into cache |
 | `WARMER_TAIL_MB` | `8` | also pull the tail (mkv cues / Plex end-probe); `0` = off |
 | `WARMER_SOURCES` | `ondeck,next` | background signals to warm from (`ondeck`, `next`, `recent`). Detail-page warming is separate, via the log vars below |
+| `WARMER_ONDECK` | `true` | quick on/off for **Continue Watching** (On Deck) warming, without editing `WARMER_SOURCES` |
 | `WARMER_PLEXLOG_CMD` | *(none)* | stream command for Plex's server log (e.g. `tail -n0 -F '<log>'`, or `pct exec <ct> -- tail -n0 -F '<log>'`). Enables detail-page warming |
 | `WARMER_PLEXLOG_FILE` | *(none)* | a directly-readable path to Plex's log (alternative to `_CMD`) |
 | `WARMER_INTERVAL` | `120` | seconds between session polls (next-episode prefetch) |

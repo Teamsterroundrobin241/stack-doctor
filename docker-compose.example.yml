@@ -78,6 +78,7 @@ services:
       WARMER_TAIL_MB: "4"            # also pull the tail (mkv cues / Plex end-probe); 0 = off
       WARMER_PARTS: "1"             # warm only the highest-res version per title (not the 4K AND the 1080p)
       WARMER_SOURCES: "ondeck,next"  # ondeck = Continue Watching, next = next episode of what's playing, recent = newly added
+      WARMER_ONDECK: "true"          # quick on/off for Continue Watching warming (set false to disable just that)
       WARMER_INTERVAL: "120"         # seconds between session polls (next-episode prefetch)
       WARMER_ONDECK_EVERY: "600"     # seconds between On Deck / recent warms
       WARMER_MAX_PER_CYCLE: "40"     # cap background warms per cycle
