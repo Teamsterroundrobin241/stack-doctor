@@ -160,6 +160,7 @@ WARM_LOAD_MAX     = _f("WARMER_LOAD_MAX", 0)            # skip warming if host 1
 WARM_READ_TIMEOUT = _i("WARMER_READ_TIMEOUT", 60)       # abandon a single warm read after this long (hung mount guard)
 WARM_CONCURRENCY  = _i("WARMER_CONCURRENCY", 2)         # simultaneous BACKGROUND (on-deck/recent) warm reads
 WARM_OPEN_CONC    = _i("WARMER_OPEN_CONCURRENCY", 4)    # dedicated lane for the title you OPEN, so it starts instantly and never queues behind background warming
+WARM_PARTS        = _i("WARMER_PARTS", 1)              # how many versions per title to warm (1 = highest-res only; 0 = all). Avoids warming a 1080p you'll never play next to the 4K
 WARM_SOURCES      = [s.strip().lower() for s in os.environ.get("WARMER_SOURCES", "ondeck,next").split(",") if s.strip()]
 WARM_PATH_MAP     = os.environ.get("WARMER_PATH_MAP", "")   # "plexPrefix:hostPrefix" if Plex's file path != this host's
 # detail-page warming: tail Plex's server log and warm the exact title a viewer opens (the one true
@@ -669,12 +670,19 @@ class Plex:
         except Exception: return []
 
     def parts(self, rk):
+        """File paths for this item, highest-resolution version first (so we can warm just the top one)."""
         out = []
         try:
-            for p in self._get("/library/metadata/%s" % rk).iter("Part"):
-                if p.get("file"): out.append(p.get("file"))
-        except Exception: pass
-        return out
+            for m in self._get("/library/metadata/%s" % rk).iter("Media"):
+                try: res = int(m.get("height") or 0) * 1000000 + int(m.get("bitrate") or 0)
+                except Exception: res = 0
+                for p in m.iter("Part"):
+                    if p.get("file"):
+                        out.append((res, p.get("file")))
+            out.sort(key=lambda x: x[0], reverse=True)
+        except Exception:
+            return []
+        return [f for _, f in out]
 
     def recent(self, n):
         out = []
@@ -699,6 +707,9 @@ def _warm_record(title, why):
     _warm_recent.append({"ts": time.time(), "title": title, "why": why})
     if len(_warm_recent) > 80:
         del _warm_recent[:len(_warm_recent) - 80]
+
+def _limit_parts(files):
+    return files if WARM_PARTS <= 0 else files[:WARM_PARTS]
 
 def _host_path(f):
     if WARM_PATH_MAP and ":" in WARM_PATH_MAP:
@@ -771,7 +782,7 @@ def _warm_targets(plex):
             idx = next((i for i, e in enumerate(eps) if e.get("ratingKey") == v.get("ratingKey")), -1)
             if idx >= 0:
                 for e in eps[idx + 1: idx + 1 + WARM_NEXT_EPS]:
-                    for f in plex.parts(e.get("ratingKey")):
+                    for f in _limit_parts(plex.parts(e.get("ratingKey"))):
                         add("next-ep", f)
     # Plex-first: speculative On Deck / recent warming pauses entirely while ANYONE is watching, so it
     # never competes with a live stream for usenet bandwidth. It catches up when playback stops.
@@ -779,11 +790,11 @@ def _warm_targets(plex):
         _warm_last_ondeck[0] = time.time()
         if "ondeck" in WARM_SOURCES:                        # Continue Watching / Up Next
             for v in plex.ondeck():
-                for f in plex.parts(v.get("ratingKey")):
+                for f in _limit_parts(plex.parts(v.get("ratingKey"))):
                     add("ondeck", f)
         if "recent" in WARM_SOURCES and WARM_RECENT_COUNT > 0:
             for v in plex.recent(WARM_RECENT_COUNT):
-                for f in plex.parts(v.get("ratingKey")):
+                for f in _limit_parts(plex.parts(v.get("ratingKey"))):
                     add("recent", f)
     return targets
 
@@ -816,7 +827,7 @@ def warmer_loop(stop):
 _PLEXLOG_RE = re.compile(r"/library/metadata/(\d+)(?:/extras|\?[^\s]*includeExtras=1)")
 
 def _warm_opened(plex, rk):
-    for f in plex.parts(rk):                                    # numeric ratingKey -> file path(s)
+    for f in _limit_parts(plex.parts(rk)):                      # warm just the top version(s) you'd actually play
         if _warm_file(f, "detail-page"):
             log.info("[warmer] you opened rk=%s -> warmed: %s", rk, os.path.basename(_host_path(f)))
 

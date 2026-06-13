@@ -259,6 +259,7 @@ own concurrency lane, even during playback.
 | `WARMER_LOAD_MAX` | `0` | pause speculative (on-deck/recent) warming while host 1-min load is above this (`0` = off). A title you *actively open* tolerates 2x this before yielding. Set it to protect live playback |
 | `WARMER_CONCURRENCY` | `2` | simultaneous **background** (on-deck/recent) warm reads. Kept low so background warming never starves live playback of usenet connections |
 | `WARMER_OPEN_CONCURRENCY` | `4` | simultaneous **detail-page** warm reads, a separate lane so a title you actively open starts warming instantly and never queues behind background warming |
+| `WARMER_PARTS` | `1` | how many versions per title to warm (`1` = highest-resolution only; `0` = all). Stops a 1080p you'll never play from warming alongside the 4K and clogging the lane |
 | `WARMER_READ_TIMEOUT` | `60` | abandon a single warm read after this long (hung-mount guard) |
 | `WARMER_PATH_MAP` | *(none)* | `plexPrefix:hostPrefix` if Plex's file path differs from this host's |
 
