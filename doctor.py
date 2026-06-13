@@ -156,8 +156,9 @@ WARM_NEXT_EPS     = _i("WARMER_NEXT_EPISODES", 1)       # warm this many upcomin
 WARM_RECENT_COUNT = _i("WARMER_RECENT_COUNT", 0)        # warm N most-recently-added per library (0=off)
 WARM_MAX_CYCLE    = _i("WARMER_MAX_PER_CYCLE", 12)      # cap warms per cycle (rate-limit the usenet fetch)
 WARM_COOLDOWN     = _i("WARMER_COOLDOWN", 3600)         # do not re-warm the same file within this many seconds
-WARM_LOAD_MAX     = _f("WARMER_LOAD_MAX", 0)            # skip a cycle if host 1-min load above this (protect Plex); 0=off
+WARM_LOAD_MAX     = _f("WARMER_LOAD_MAX", 0)            # skip warming if host 1-min load above this (protect Plex); 0=off
 WARM_READ_TIMEOUT = _i("WARMER_READ_TIMEOUT", 60)       # abandon a single warm read after this long (hung mount guard)
+WARM_CONCURRENCY  = _i("WARMER_CONCURRENCY", 2)         # max simultaneous warm reads (bounds the usenet pull so it never floods decypharr)
 WARM_SOURCES      = [s.strip().lower() for s in os.environ.get("WARMER_SOURCES", "ondeck,next").split(",") if s.strip()]
 WARM_PATH_MAP     = os.environ.get("WARMER_PATH_MAP", "")   # "plexPrefix:hostPrefix" if Plex's file path != this host's
 # detail-page warming: tail Plex's server log and warm the exact title a viewer opens (the one true
@@ -686,6 +687,7 @@ class Plex:
 
 _warm_state = {}            # host_path -> last_warm_ts
 _warm_lock = threading.Lock()
+_warm_sem = threading.Semaphore(max(1, WARM_CONCURRENCY))   # cap concurrent warm reads (never flood decypharr)
 _warm_last_ondeck = [0.0]
 _warm_count = [0]           # total warms since start (for the UI)
 _warm_recent = []           # recent warms for the UI: [{"ts","title","why"}]
@@ -705,6 +707,8 @@ def _host_path(f):
 
 def _warm_file(path, reason="cycle"):
     p = _host_path(path)
+    if WARM_LOAD_MAX > 0 and host_load() > WARM_LOAD_MAX:   # back off under load (applies to detail-page too)
+        return False
     with _warm_lock:                                    # atomic claim: one warm per file per cooldown
         if time.time() - _warm_state.get(p, 0) < WARM_COOLDOWN:
             return False
@@ -731,7 +735,8 @@ def _warm_file(path, reason="cycle"):
         except Exception as e:
             res["err"] = str(e)[:60]
     t0 = time.time()
-    th = threading.Thread(target=_do, daemon=True); th.start(); th.join(WARM_READ_TIMEOUT)
+    with _warm_sem:                                     # cap concurrent usenet pulls so warming never floods decypharr
+        th = threading.Thread(target=_do, daemon=True); th.start(); th.join(WARM_READ_TIMEOUT)
     if th.is_alive():
         _warm_state.pop(p, None)
         log.warning("[warmer] read timed out (%ds, mount slow/hung?): %s", WARM_READ_TIMEOUT, os.path.basename(p))

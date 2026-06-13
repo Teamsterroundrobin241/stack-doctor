@@ -81,7 +81,8 @@ services:
       WARMER_ONDECK_EVERY: "600"     # seconds between On Deck / recent warms
       WARMER_MAX_PER_CYCLE: "12"     # cap warms per cycle (rate-limit the usenet fetch)
       WARMER_COOLDOWN: "3600"        # don't re-warm the same file within this many seconds
-      WARMER_LOAD_MAX: "30"          # skip a warm cycle if host 1-min load is above this (protect live playback)
+      WARMER_LOAD_MAX: "12"          # pause ALL warming if host 1-min load is above this (protect live playback)
+      WARMER_CONCURRENCY: "2"        # hard cap on simultaneous warm reads so a burst can't flood the mount
       # WARMER_PATH_MAP: "/data/media:/mnt/library"   # if Plex's file path differs from this container's
       # detail-page warming: warm the exact title a viewer opens (bind-mount Plex's log read-only, then:)
       # WARMER_PLEXLOG_FILE: "/plexlog/Plex Media Server.log"
